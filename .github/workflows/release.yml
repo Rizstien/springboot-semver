@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install semantic-release
+        run: npm ci
+
+      - name: Run semantic-release (compute version and tag)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
+      - name: Get latest tag
+        id: get_tag
+        run: echo "tag=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+
+      - name: Set Maven version to tag
+        run: |
+          TAG=${{ steps.get_tag.outputs.tag }}
+          VERSION=${TAG#v}
+          mvn -B versions:set -DnewVersion=$VERSION
+
+      - name: Build with Maven
+        run: |
+          TAG=${{ steps.get_tag.outputs.tag }}
+          VERSION=${TAG#v}
+          mvn -B clean package -Drevision=$VERSION
+
+      - name: Build Docker image (optional)
+        env:
+          VERSION: ${{ steps.get_tag.outputs.tag }}
+        run: |
+          VERSION=${{ steps.get_tag.outputs.tag }}
+          VERSION=${VERSION#v}
+          docker build -t ${{ github.repository }}:$VERSION .
+
+      - name: Push Docker image (docker hub)
+        if: ${{ secrets.DOCKER_USERNAME != null }}
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          VERSION: ${{ steps.get_tag.outputs.tag }}
+        run: |
+          VERSION=${VERSION#v}
+          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+          docker push $DOCKER_USERNAME/${{ github.repository }}:$VERSION
